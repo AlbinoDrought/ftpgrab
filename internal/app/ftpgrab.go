@@ -199,10 +199,15 @@ func (fg *FtpGrab) retrieveRecursive(base string, source string, dest string) {
 func (fg *FtpGrab) retrieve(base string, src string, dest string, file os.FileInfo, retry int) *model.Entry {
 	srcpath := path.Join(src, file.Name())
 	destpath := path.Join(dest, file.Name())
+	finaldestpath := destpath
 
 	if file.IsDir() {
 		fg.retrieveRecursive(base, srcpath, destpath)
 		return nil
+	}
+
+	if fg.cfg.Download.MoveAfterComplete {
+		destpath += ".ftpgrabdl"
 	}
 
 	status := fg.fileStatus(base, src, dest, file)
@@ -283,6 +288,13 @@ func (fg *FtpGrab) retrieve(base string, src string, dest string, file os.FileIn
 		}
 		if err = os.Chtimes(destpath, file.ModTime(), file.ModTime()); err != nil {
 			sublogger.Warn().Err(err).Msg("Cannot change modtime of destination file")
+		}
+		if finaldestpath != destpath {
+			if err = os.Rename(destpath, finaldestpath); err != nil {
+				sublogger.Error().Err(err).Msg("Cannot move downloaded file from temporary location")
+				jnlEntry.StatusType = "error"
+				jnlEntry.StatusText = fmt.Sprintf("Cannot move downloaded file from temporary location: %v", err)
+			}
 		}
 	}
 
