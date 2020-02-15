@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"net/http"
 	"os"
 	"path"
 	"runtime"
@@ -67,24 +68,42 @@ func New(cfg *config.Configuration, location *time.Location) (*FtpGrab, error) {
 func (fg *FtpGrab) Start() error {
 	var err error
 
+	hangForever := false
+
+	if fg.cfg.Flags.Server {
+		hangForever = true
+		http.HandleFunc("/run", func(w http.ResponseWriter, req *http.Request) {
+			go fg.Run()
+			log.Info().Msgf("Received /run request from %s", req.RemoteAddr)
+			w.WriteHeader(204)
+		})
+		go func() {
+			log.Fatal().Err(http.ListenAndServe(":"+fg.cfg.Flags.ServerPort, nil))
+		}()
+		log.Info().Msgf("Listening for /run on %s", fg.cfg.Flags.ServerPort)
+	}
+
 	// Run on startup
 	fg.Run()
 
-	// Init scheduler if defined
-	if fg.cfg.Flags.Schedule == "" {
+	if fg.cfg.Flags.Schedule != "" {
+		hangForever = true
+		fg.jobID, err = fg.cron.AddJob(fg.cfg.Flags.Schedule, fg)
+		if err != nil {
+			return err
+		}
+		log.Info().Msgf("Cron initialized with schedule %s", fg.cfg.Flags.Schedule)
+
+		// Start scheduler
+		fg.cron.Start()
+		log.Info().Msgf("Next run in %s (%s)",
+			durafmt.ParseShort(fg.cron.Entry(fg.jobID).Next.Sub(time.Now())).String(),
+			fg.cron.Entry(fg.jobID).Next)
+	}
+
+	if !hangForever {
 		return nil
 	}
-	fg.jobID, err = fg.cron.AddJob(fg.cfg.Flags.Schedule, fg)
-	if err != nil {
-		return err
-	}
-	log.Info().Msgf("Cron initialized with schedule %s", fg.cfg.Flags.Schedule)
-
-	// Start scheduler
-	fg.cron.Start()
-	log.Info().Msgf("Next run in %s (%s)",
-		durafmt.ParseShort(fg.cron.Entry(fg.jobID).Next.Sub(time.Now())).String(),
-		fg.cron.Entry(fg.jobID).Next)
 
 	select {}
 }
